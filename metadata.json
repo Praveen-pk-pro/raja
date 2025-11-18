@@ -1,0 +1,5 @@
+{
+  "name": "ShopDo",
+  "description": "A simple e-commerce application with admin and user roles, built with React, TypeScript, and Tailwind CSS.",
+  "requestFramePermissions": []
+}
