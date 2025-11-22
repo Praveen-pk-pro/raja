@@ -23,6 +23,11 @@ interface Product {
   stock: number;
 }
 
+interface CartItem {
+  product: Product;
+  quantity: number;
+}
+
 // --- MAIN APP COMPONENT ---
 const App: React.FC = () => {
   // --- STATE MANAGEMENT ---
@@ -33,6 +38,12 @@ const App: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [error, setError] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  // Cart System States
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [checkoutStep, setCheckoutStep] = useState<'cart' | 'checkout' | 'success'>('cart');
+  const [showInStockOnly, setShowInStockOnly] = useState(false);
 
   // --- LOCALSTORAGE PERSISTENCE ---
   useEffect(() => {
@@ -61,14 +72,16 @@ const App: React.FC = () => {
     // --- LOADING EFFECT ---
   useEffect(() => {
     if (isLoading && currentUser) {
-      const timer = setTimeout(() => {
-        setIsLoading(false);
-        setPage(currentUser.role === 'admin' ? 'admin-dashboard' : 'user-home');
-      }, 3000); // 3 seconds
-
-      return () => clearTimeout(timer); // Cleanup timer on component unmount
+      // Only for initial login loading
+      if (checkoutStep === 'cart') { 
+         const timer = setTimeout(() => {
+            setIsLoading(false);
+            setPage(currentUser.role === 'admin' ? 'admin-dashboard' : 'user-home');
+         }, 3000);
+         return () => clearTimeout(timer);
+      }
     }
-  }, [isLoading, currentUser]);
+  }, [isLoading, currentUser, checkoutStep]);
 
 
   const saveUsers = (updatedUsers: User[]) => {
@@ -145,6 +158,8 @@ const App: React.FC = () => {
     setPage('login');
     setError('');
     setIsLoading(false);
+    setCart([]);
+    setIsCartOpen(false);
   };
 
   // --- PRODUCT CRUD HANDLERS ---
@@ -174,26 +189,216 @@ const App: React.FC = () => {
     }
   };
 
+  // --- CART & CHECKOUT HANDLERS ---
+  const addToCart = (product: Product) => {
+    setCart(prev => {
+      const existing = prev.find(item => item.product.id === product.id);
+      if (existing) {
+        if (existing.quantity >= product.stock) return prev; // Don't exceed stock
+        return prev.map(item => item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+      }
+      return [...prev, { product, quantity: 1 }];
+    });
+    setIsCartOpen(true);
+  };
+
+  const removeFromCart = (productId: number) => {
+    setCart(prev => prev.filter(item => item.product.id !== productId));
+  };
+
+  const updateQuantity = (productId: number, delta: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.product.id === productId) {
+        const newQty = item.quantity + delta;
+        if (newQty < 1) return item;
+        if (newQty > item.product.stock) return item;
+        return { ...item, quantity: newQty };
+      }
+      return item;
+    }));
+  };
+
+  const cartTotal = cart.reduce((sum, item) => sum + (item.product.price * item.quantity), 0);
+
+  const handlePlaceOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    
+    // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Deduct stock
+    const updatedProducts = products.map(product => {
+      const cartItem = cart.find(item => item.product.id === product.id);
+      if (cartItem) {
+        return { ...product, stock: Math.max(0, product.stock - cartItem.quantity) };
+      }
+      return product;
+    });
+    
+    saveProducts(updatedProducts);
+    setCart([]);
+    setIsLoading(false);
+    setCheckoutStep('success');
+  };
 
   // --- RENDER LOGIC ---
+  const renderCartModal = () => {
+    if (!isCartOpen) return null;
+
+    return (
+      <div className="fixed inset-0 z-[100] flex justify-end">
+        {/* Backdrop */}
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onClick={() => setIsCartOpen(false)}></div>
+        
+        {/* Drawer */}
+        <div className="relative w-full max-w-md h-full bg-slate-800 shadow-2xl shadow-purple-900/20 flex flex-col border-l border-slate-700 animate-slideInRight">
+          {/* Header */}
+          <div className="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-800">
+            <h2 className="text-2xl font-bold text-white">
+                {checkoutStep === 'cart' ? 'Your Cart' : checkoutStep === 'checkout' ? 'Checkout' : 'Order Status'}
+            </h2>
+            <button onClick={() => { setIsCartOpen(false); setTimeout(() => setCheckoutStep('cart'), 300); }} className="text-slate-400 hover:text-white">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="flex-grow overflow-y-auto p-6">
+            {checkoutStep === 'cart' && (
+              <>
+                {cart.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="mb-4 opacity-50"><circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" /><path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" /></svg>
+                    <p>Your cart is empty</p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {cart.map(item => (
+                      <div key={item.product.id} className="flex gap-4 items-start">
+                        <img src={item.product.imageUrl} alt={item.product.name} className="w-20 h-20 rounded-md object-cover bg-slate-700" />
+                        <div className="flex-grow">
+                          <h3 className="font-bold text-slate-100">{item.product.name}</h3>
+                          <p className="text-cyan-400 font-semibold">${item.product.price.toFixed(2)}</p>
+                          <div className="flex items-center gap-3 mt-2">
+                            <button onClick={() => updateQuantity(item.product.id, -1)} className="w-6 h-6 flex items-center justify-center bg-slate-700 rounded hover:bg-slate-600">-</button>
+                            <span className="text-sm w-4 text-center">{item.quantity}</span>
+                            <button 
+                              onClick={() => updateQuantity(item.product.id, 1)} 
+                              disabled={item.quantity >= item.product.stock}
+                              className="w-6 h-6 flex items-center justify-center bg-slate-700 rounded hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >+</button>
+                          </div>
+                        </div>
+                        <button onClick={() => removeFromCart(item.product.id)} className="text-red-400 hover:text-red-300 p-1"><TrashIcon /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {checkoutStep === 'checkout' && (
+              <form id="checkout-form" onSubmit={handlePlaceOrder} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">Full Name</label>
+                  <input type="text" required className="w-full p-3 bg-slate-700 rounded-md border border-slate-600 focus:ring-2 focus:ring-purple-500" placeholder="John Doe" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">Shipping Address</label>
+                  <textarea required className="w-full p-3 bg-slate-700 rounded-md border border-slate-600 focus:ring-2 focus:ring-purple-500 h-24 resize-none" placeholder="123 Space Street, Mars Colony"></textarea>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-400 mb-1">Card Number (Dummy)</label>
+                  <input type="text" required className="w-full p-3 bg-slate-700 rounded-md border border-slate-600 focus:ring-2 focus:ring-purple-500" placeholder="0000 0000 0000 0000" />
+                </div>
+                <div className="flex gap-4">
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-slate-400 mb-1">Expiry</label>
+                    <input type="text" required className="w-full p-3 bg-slate-700 rounded-md border border-slate-600 focus:ring-2 focus:ring-purple-500" placeholder="MM/YY" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-medium text-slate-400 mb-1">CVC</label>
+                    <input type="text" required className="w-full p-3 bg-slate-700 rounded-md border border-slate-600 focus:ring-2 focus:ring-purple-500" placeholder="123" />
+                  </div>
+                </div>
+              </form>
+            )}
+
+            {checkoutStep === 'success' && (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mb-6">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="text-green-400"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </div>
+                <h3 className="text-2xl font-bold text-white mb-2">Order Placed!</h3>
+                <p className="text-slate-400 mb-8">Thank you for your purchase. Your order is on its way to the coordinates provided.</p>
+                <button onClick={() => { setIsCartOpen(false); setCheckoutStep('cart'); }} className="px-8 py-3 bg-slate-700 rounded-md font-bold hover:bg-slate-600 transition-colors">
+                  Continue Shopping
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Footer Actions */}
+          {checkoutStep !== 'success' && (
+            <div className="p-6 border-t border-slate-700 bg-slate-800">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-slate-400">Total</span>
+                <span className="text-2xl font-bold text-white">${cartTotal.toFixed(2)}</span>
+              </div>
+              {checkoutStep === 'cart' ? (
+                <button 
+                  onClick={() => setCheckoutStep('checkout')} 
+                  disabled={cart.length === 0}
+                  className="w-full py-3 bg-purple-600 rounded-md font-bold text-white hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Proceed to Checkout
+                </button>
+              ) : (
+                <div className="flex gap-3">
+                   <button 
+                    type="button"
+                    onClick={() => setCheckoutStep('cart')} 
+                    className="flex-1 py-3 bg-slate-700 rounded-md font-bold text-white hover:bg-slate-600 transition-colors"
+                  >
+                    Back
+                  </button>
+                  <button 
+                    type="submit" 
+                    form="checkout-form"
+                    disabled={isLoading}
+                    className="flex-[2] py-3 bg-cyan-500 rounded-md font-bold text-white hover:bg-cyan-600 transition-colors disabled:opacity-70 flex justify-center items-center"
+                  >
+                    {isLoading ? (
+                        <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    ) : 'Pay Now'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+
   const renderPage = () => {
-    if (isLoading) {
-      // --- LOADING SCREEN ---
+    // Initial App Loading (Login/Dashboard transition)
+    if (isLoading && checkoutStep === 'cart' && !isCartOpen) {
       return (
         <div className="w-full max-w-md mx-auto">
             <div className="bg-slate-800/50 backdrop-blur-lg border border-slate-700 rounded-2xl p-8 sm:p-12 text-center shadow-2xl shadow-purple-500/10 flex flex-col items-center">
-                {/* Spinner */}
                 <svg className="animate-spin h-16 w-16 text-purple-400 mb-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-
-                {/* Title */}
                 <h1 className="text-4xl font-black bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent mb-6 animate-pulse">
                     Launching ShopDo
                 </h1>
-
-                {/* Credits */}
                 <div className="text-slate-400 text-sm space-y-2">
                     <p>A web app made by the team</p>
                     <p className="font-semibold text-slate-300">Raja vel, Prithivi raj, sennan posali, Preetha</p>
@@ -309,41 +514,66 @@ const App: React.FC = () => {
     
     if (currentUser.role === 'user') {
       // --- USER HOME PAGE ---
+      const displayedProducts = products.filter(p => showInStockOnly ? p.stock > 0 : true);
+
       return (
         <div className="w-full max-w-7xl mx-auto">
-            <h1 className="text-4xl font-bold mb-8">Products</h1>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
-              {products.map(product => {
-                const isOutOfStock = product.stock === 0;
-                return (
-                  <div key={product.id} className={`bg-slate-800 rounded-lg shadow-lg overflow-hidden group transition-all duration-300 ${!isOutOfStock && 'hover:scale-[1.03] hover:shadow-2xl hover:shadow-purple-500/25'}`}>
-                    <div className="relative h-48 overflow-hidden">
-                       <img src={product.imageUrl || 'https://placehold.co/600x400/1e293b/94a3b8?text=Product'} alt={product.name} className={`w-full h-full object-cover transition-transform duration-500 ease-in-out ${!isOutOfStock && 'group-hover:scale-110'} ${isOutOfStock ? 'grayscale' : ''}`} />
-                       {isOutOfStock && (
-                            <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                                <span className="text-white font-bold tracking-wider border-2 border-white rounded-md px-4 py-2">OUT OF STOCK</span>
-                            </div>
-                        )}
-                    </div>
-                    <div className="p-4 flex flex-col flex-grow">
-                       <div className="flex justify-between items-start mb-2">
-                            <h2 className="text-xl font-bold truncate pr-2 flex-grow">{product.name}</h2>
-                            <span className={`mt-1 flex-shrink-0 text-xs font-bold px-2 py-1 rounded-full ${isOutOfStock ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
-                                {isOutOfStock ? 'Out of Stock' : 'In Stock'}
-                            </span>
+            <div className="flex justify-between items-center mb-8">
+              <h1 className="text-4xl font-bold">Products</h1>
+              <div className="flex items-center gap-2">
+                <input 
+                  type="checkbox" 
+                  id="stockFilter" 
+                  checked={showInStockOnly} 
+                  onChange={(e) => setShowInStockOnly(e.target.checked)}
+                  className="w-5 h-5 rounded border-gray-600 text-purple-600 focus:ring-purple-500 bg-slate-700" 
+                />
+                <label htmlFor="stockFilter" className="text-slate-300 cursor-pointer select-none">In Stock Only</label>
+              </div>
+            </div>
+            
+            {displayedProducts.length === 0 ? (
+               <div className="text-center py-20 text-slate-500">
+                 <p className="text-xl">No products found.</p>
+               </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
+                {displayedProducts.map(product => {
+                  const isOutOfStock = product.stock === 0;
+                  return (
+                    <div key={product.id} className={`bg-slate-800 rounded-lg shadow-lg overflow-hidden group transition-all duration-300 ${!isOutOfStock && 'hover:scale-[1.03] hover:shadow-2xl hover:shadow-purple-500/25'}`}>
+                      <div className="relative h-48 overflow-hidden">
+                        <img src={product.imageUrl || 'https://placehold.co/600x400/1e293b/94a3b8?text=Product'} alt={product.name} className={`w-full h-full object-cover transition-transform duration-500 ease-in-out ${!isOutOfStock && 'group-hover:scale-110'} ${isOutOfStock ? 'grayscale' : ''}`} />
+                        {isOutOfStock && (
+                              <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                                  <span className="text-white font-bold tracking-wider border-2 border-white rounded-md px-4 py-2">OUT OF STOCK</span>
+                              </div>
+                          )}
+                      </div>
+                      <div className="p-4 flex flex-col flex-grow">
+                        <div className="flex justify-between items-start mb-2">
+                              <h2 className="text-xl font-bold truncate pr-2 flex-grow">{product.name}</h2>
+                              <span className={`mt-1 flex-shrink-0 text-xs font-bold px-2 py-1 rounded-full ${isOutOfStock ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+                                  {isOutOfStock ? 'Out of Stock' : 'In Stock'}
+                              </span>
+                          </div>
+                        <p className="text-slate-400 text-sm h-10 overflow-hidden flex-grow">{product.description}</p>
+                        <div className="flex justify-between items-center mt-4">
+                          <p className="text-lg font-black text-cyan-400">${product.price.toFixed(2)}</p>
+                          <button 
+                            onClick={() => addToCart(product)}
+                            disabled={isOutOfStock} 
+                            className="px-4 py-2 bg-purple-600 rounded-md font-bold text-sm hover:bg-purple-700 transition-colors disabled:bg-slate-600 disabled:cursor-not-allowed disabled:text-slate-400"
+                          >
+                            {isOutOfStock ? 'Unavailable' : 'Add to Cart'}
+                          </button>
                         </div>
-                      <p className="text-slate-400 text-sm h-10 overflow-hidden flex-grow">{product.description}</p>
-                      <div className="flex justify-between items-center mt-4">
-                        <p className="text-lg font-black text-cyan-400">${product.price.toFixed(2)}</p>
-                        <button disabled={isOutOfStock} className="px-4 py-2 bg-purple-600 rounded-md font-bold text-sm hover:bg-purple-700 transition-colors disabled:bg-slate-600 disabled:cursor-not-allowed disabled:text-slate-400">
-                          {isOutOfStock ? 'Unavailable' : 'View / Buy'}
-                        </button>
                       </div>
                     </div>
-                  </div>
-                )
-              })}
-            </div>
+                  )
+                })}
+              </div>
+            )}
         </div>
       );
     }
@@ -351,10 +581,17 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col">
-      <Header currentUser={currentUser} onLogout={handleLogout} onNavigate={setPage} />
-      <main className="flex-grow container mx-auto px-4 py-8 md:py-12 flex flex-col justify-center items-center">
+      <Header 
+        currentUser={currentUser} 
+        onLogout={handleLogout} 
+        onNavigate={setPage} 
+        cartItemCount={cart.reduce((acc, item) => acc + item.quantity, 0)}
+        onOpenCart={() => setIsCartOpen(true)}
+      />
+      <main className="flex-grow container mx-auto px-4 py-8 md:py-12 flex flex-col justify-center items-center relative">
         {renderPage()}
       </main>
+      {renderCartModal()}
       <Footer />
     </div>
   );
